@@ -1,8 +1,11 @@
 """Local structural checks and basic credential heuristics; no network access."""
+import hashlib
+import io
 import json
 import re
 import subprocess
 import sys
+import zipfile
 from datetime import date
 from pathlib import Path
 
@@ -30,7 +33,7 @@ PATTERNS = {
 }
 
 
-def read_safe(root, relative):
+def read_bytes_safe(root, relative, limit=MAX_FILE_BYTES):
     path = Path(relative)
     if path.is_absolute() or ".." in path.parts:
         raise ValueError(f"{relative}: path outside repository")
@@ -42,9 +45,13 @@ def read_safe(root, relative):
     if not current.is_file():
         raise ValueError(f"{relative}: missing file")
     data = current.read_bytes()
-    if len(data) > MAX_FILE_BYTES:
-        raise ValueError(f"{relative}: exceeds 256 KiB")
-    return data.decode("utf-8")
+    if len(data) > limit:
+        raise ValueError(f"{relative}: exceeds size limit")
+    return data
+
+
+def read_safe(root, relative):
+    return read_bytes_safe(root, relative).decode("utf-8")
 
 
 def credential_issues(relative, content):
@@ -130,12 +137,73 @@ def skill_issues(relative, content):
     return []
 
 
+def validate_library(root):
+    """Check imported bytes without executing or interpreting package instructions."""
+    library = root / "library"
+    if not library.exists():
+        return []
+    issues = []
+    manifest = json.loads(read_safe(root, "library/manifest.json"))
+    if manifest.get("schema_version") != 1 or not isinstance(manifest.get("files"), list):
+        return ["library/manifest.json: unsupported manifest"]
+    expected = {"README.md", "manifest.json"}
+    for entry in manifest["files"]:
+        name = entry["path"]
+        if name in expected:
+            issues.append("library/manifest.json: duplicate or reserved path")
+            continue
+        expected.add(name)
+        relative = "library/" + name
+        path = Path(name)
+        if path.is_absolute() or ".." in path.parts:
+            issues.append("library/manifest.json: unsafe member path")
+            continue
+        data = read_bytes_safe(root, relative, 16 * 1024 * 1024)
+        if len(data) != entry["bytes"] or hashlib.sha256(data).hexdigest() != entry["sha256"]:
+            issues.append(f"{relative}: size or SHA-256 mismatch")
+        issues.extend(credential_issues(relative, ""))
+        # Imported examples use other dialects; check high-confidence secret formats.
+        for label in ("provider-token", "private-key"):
+            if PATTERNS[label].search(data.decode("utf-8", errors="ignore")):
+                issues.append(f"{relative}: possible {label}; review locally")
+        if path.suffix in {".zip", ".jar"}:
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                if sum(m.file_size for m in archive.infolist()) > 32 * 1024 * 1024:
+                    issues.append(f"{relative}: archive expands beyond 32 MiB")
+                    continue
+                if archive.testzip():
+                    issues.append(f"{relative}: corrupt archive")
+                for member in archive.infolist():
+                    member_path = Path(member.filename)
+                    if member_path.is_absolute() or ".." in member_path.parts:
+                        issues.append(f"{relative}: unsafe archive path")
+                    if member.file_size > 16 * 1024 * 1024 or member.external_attr >> 16 & 0o170000 == 0o120000:
+                        issues.append(f"{relative}: oversized or symlink archive member")
+                        continue
+                    issues.extend(credential_issues(relative + "/" + member.filename, ""))
+                    if not member.is_dir():
+                        content = archive.read(member).decode("utf-8", errors="ignore")
+                        for label in ("provider-token", "private-key"):
+                            if PATTERNS[label].search(content):
+                                issues.append(f"{relative}: possible {label} inside archive")
+    actual = {p.relative_to(library).as_posix() for p in library.rglob("*") if p.is_file() or p.is_symlink()}
+    if actual != expected:
+        issues.append("library/: unlisted or missing import files; review and update manifest")
+    return issues
+
+
 def validate(root):
     issues = []
+    try:
+        issues.extend(validate_library(root))
+    except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile) as exc:
+        issues.append(f"library/: cannot validate ({type(exc).__name__})")
     for relative in REQUIRED:
         if not (root / relative).is_file():
             issues.append(f"{relative}: required file missing")
     for relative in candidate_files(root):
+        if relative.startswith("library/") and relative not in {"library/README.md", "library/manifest.json"}:
+            continue
         path = root / relative
         if path.is_symlink() and relative in {".agents/skills", ".claude/skills"}:
             if path.resolve() != (root / "skills").resolve():

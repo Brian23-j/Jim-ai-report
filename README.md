@@ -14,6 +14,7 @@
 | [skills/](skills/README.md) | 可复用、带 SKILL.md 的工作流程 | 按实际复用需求维护 |
 | [templates/](templates/README.md) | 项目、交接、偏好变更、Skill 模板 | 根据使用情况改进 |
 | [scripts/](scripts/README.md) | 本地校验、按需导出、工具自检 | 不联网，不调用 AI，不安装或修改平台设置 |
+| [library/](library/README.md) | 用户提供的四项第三方 Skill / 插件资料及导入清单 | 明确请求后导入；不自动安装或加载 |
 | [AGENTS.md](AGENTS.md) / [CLAUDE.md](CLAUDE.md) | Codex / Claude Code 的薄入口 | 规则变化时更新引用；不复制偏好副本 |
 
 `projects/example/` 和 `handoffs/example/` 均为虚构示例，不是用户的实际项目。`.local/` 用于未审核草稿和派生包，默认不提交。

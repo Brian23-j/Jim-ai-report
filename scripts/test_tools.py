@@ -1,15 +1,47 @@
 """Behavioral checks for selection, boundaries, and basic credential handling."""
 import json
+import hashlib
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from export_context import build_bundle, selected_paths
-from validate import BASE_FILES, MAX_FILE_BYTES, candidate_files, credential_issues, preference_issues, read_safe
+from validate import BASE_FILES, MAX_FILE_BYTES, candidate_files, credential_issues, preference_issues, read_safe, validate_library
 
 
 class ToolTests(unittest.TestCase):
+    def test_import_manifest_detects_tampering_and_unlisted_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            library = root / "library"
+            library.mkdir()
+            (library / "README.md").write_text("demo", encoding="utf-8")
+            (library / "demo.md").write_bytes(b"demo")
+            manifest = dict(schema_version=1, files=[dict(path="demo.md", bytes=4,
+                sha256=hashlib.sha256(b"demo").hexdigest())])
+            (library / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertEqual(validate_library(root), [])
+            (library / "demo.md").write_bytes(b"changed")
+            self.assertTrue(any("mismatch" in p for p in validate_library(root)))
+            (library / "extra.md").write_bytes(b"extra")
+            self.assertTrue(any("unlisted" in p for p in validate_library(root)))
+
+    def test_import_manifest_rejects_escape_and_symlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            library = root / "library"
+            library.mkdir()
+            (library / "README.md").write_text("demo", encoding="utf-8")
+            manifest = dict(schema_version=1, files=[dict(path="../outside.md", bytes=0, sha256="")])
+            (library / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertTrue(any("unsafe" in p for p in validate_library(root)))
+            (library / "link.md").symlink_to(library / "README.md")
+            manifest["files"][0]["path"] = "link.md"
+            (library / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                validate_library(root)
+
     def test_selection_is_explicit(self):
         self.assertEqual(selected_paths(), list(BASE_FILES))
         chosen = selected_paths("example", "handoffs/example/demo.md", ["resume-work", "resume-work"])
