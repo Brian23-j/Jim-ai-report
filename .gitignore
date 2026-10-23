@@ -1,0 +1,23 @@
+# Local drafts, exports and machine-specific material
+.local/
+exports/
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+
+# Credentials and raw private data must never enter Git
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets/
+private/
+raw-conversations/
+
+# Optional local skill-discovery links (sources remain in skills/)
+.agents/skills
+.claude/skills
