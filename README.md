@@ -1,4 +1,4 @@
-# rea-skill
+# report
 
 用于跨 AI 平台复用经过用户审阅的上下文、Skills、偏好、项目规范和会话交接。
 
